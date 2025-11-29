@@ -5,7 +5,7 @@ import requests
 from flask import Blueprint, request, jsonify, send_file
 from docx import Document
 from bson import ObjectId
-from app.db_utilis import db
+from app.db_utilis import client
 
 bp = Blueprint("main", __name__)
 scraper_bp = Blueprint("scraper", __name__, url_prefix="/api/")
@@ -315,31 +315,37 @@ def _download_bytes(url: str) -> bytes:
 
 def _load_profile_by_owner_id(owner_id: str) -> dict:
     """
-    Load user profile and farm data from MongoDB using ObjectId.
-    Returns profile dict compatible with autocomplete.
+    Load farm data first, then user.
     """
     try:
-        oid = ObjectId(owner_id)
+        owner_id = owner_id.strip()
 
-        # Get user from default.users
-        user_doc = db.get_database("default").users.find_one({"_id": oid})
+        farm_db = client["FarmXpertDB"]
 
-        # Get farm data from FarmXpertDB
-        farm_db = db.get_database("FarmXpertDB")
-        animals = list(farm_db.animals.find({"ownerId": oid}))
-        fields = list(farm_db.fields.find({"ownerId": oid}))
-        vehicles = list(farm_db.vehicles.find({"ownerId": oid}))
+        animals = list(farm_db.animals.find({"OwnerId": owner_id}))
+        fields = list(farm_db.fields.find({"OwnerId": owner_id}))
+        vehicles = list(farm_db.vehicles.find({"OwnerId": owner_id}))
 
-        profile = {
+        print("Owner ID:", owner_id)
+        print("Animals:", animals)
+        print("Fields:", fields)
+        print("Vehicles:", vehicles)
+
+        # Now attempt to fetch user
+        try:
+            user_doc = client["default"].users.find_one({"_id": ObjectId(owner_id)})
+        except Exception:
+            user_doc = {}
+
+        return {
             "user": user_doc or {},
             "animals": animals,
             "fields": fields,
             "vehicles": vehicles,
         }
 
-        return profile
     except Exception as e:
-        print(f"Error loading profile: {e}")
+        print("Error loading profile:", e)
         return {}
 # api endpoints
 
@@ -448,7 +454,7 @@ def extract_profile():
     """
     data = request.get_json(silent=True) or {}
     
-    owner_id = (data.get("ownerId") or "").strip()
+    owner_id = (data.get("OwnerId") or "").strip()
     callback_api = (data.get("callbackAPI") or "").strip()
 
     if not owner_id:
@@ -459,7 +465,7 @@ def extract_profile():
         profile = _load_profile_by_owner_id(owner_id)
         
         result = {
-            "ownerId": owner_id,
+            "OwnerId": owner_id,
             "user": profile.get("user", {}),
             "animals": profile.get("animals", []),
             "fields": profile.get("fields", []),
