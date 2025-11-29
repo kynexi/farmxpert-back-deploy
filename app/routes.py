@@ -1,11 +1,16 @@
 import os
 import re
+from flask import send_file
 import io
 import requests
 from flask import Blueprint, request, jsonify, send_file
 from docx import Document
 from bson import ObjectId
 from app.db_utilis import client
+
+import tempfile
+from docx import Document
+from fpdf import FPDF  
 
 bp = Blueprint("main", __name__)
 scraper_bp = Blueprint("scraper", __name__, url_prefix="/api/")
@@ -311,6 +316,51 @@ def _download_bytes(url: str) -> bytes:
     r.raise_for_status()
     return r.content
 
+def _generate_pdf_for_profile(profile: dict) -> io.BytesIO:
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Farm Profile", ln=True)
+    
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 8, "Farmer Info", ln=True)
+    pdf.set_font("Arial", size=12)
+    user = profile.get("user", {})
+    if user:
+        for k, v in user.items():
+            pdf.multi_cell(0, 6, f"{k}: {v}")
+    else:
+        pdf.cell(0, 6, "No user info available", ln=True)
+    
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 8, "Animals", ln=True)
+    pdf.set_font("Arial", size=12)
+    animals = profile.get("animals", [])
+    if animals:
+        for a in animals:
+            pdf.multi_cell(0, 6, ", ".join(f"{k}: {v}" for k, v in a.items()))
+    else:
+        pdf.cell(0, 6, "No animals available", ln=True)
+    
+    # Similarly for fields and vehicles
+    for section_name, items in [("Fields", profile.get("fields", [])),
+                                ("Vehicles", profile.get("vehicles", []))]:
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 8, section_name, ln=True)
+        pdf.set_font("Arial", size=12)
+        if items:
+            for item in items:
+                pdf.multi_cell(0, 6, ", ".join(f"{k}: {v}" for k, v in item.items()))
+        else:
+            pdf.cell(0, 6, f"No {section_name.lower()} available", ln=True)
+    
+    pdf_bytes = pdf.output(dest='S').encode('latin1')
+    bio = io.BytesIO(pdf_bytes)
+    bio.seek(0)
+    return bio
+    
 # mongo db profile loader
 
 def _load_profile_by_owner_id(owner_id: str) -> dict:
@@ -497,6 +547,58 @@ def extract_profile():
 
     except Exception as e:
         return jsonify(error="extraction_failed", details=str(e)), 500
+    
+@scraper_bp.post("/doc-gen")
+def doc_gen():
+    """
+    Generate a PDF document for a farmer, optionally send to callback API.
+
+    Body JSON:
+    {
+        "ownerId": "string",
+        "callbackAPI": "string"  # optional
+    }
+
+    Response:
+        - If callbackAPI is provided, posts the file there
+        - Otherwise returns the file directly
+    """
+    data = request.get_json(silent=True) or {}
+    owner_id = (data.get("OwnerId") or "").strip()
+    callback_api = (data.get("callbackAPI") or "").strip()
+
+    if not owner_id:
+        return jsonify(error="missing_owner_id", details="Provide 'ownerId'."), 400
+
+    try:
+        # Load farmer profile from MongoDB
+        profile = _load_profile_by_owner_id(owner_id)
+
+        # Generate PDF
+        doc_bytes = _generate_pdf_for_profile(profile)
+        filename = f"{owner_id}_farm_profile.pdf"
+        mimetype = "application/pdf"
+
+        # If callbackAPI exists, POST it there
+        if callback_api:
+            files = {"processedData": (filename, doc_bytes.getvalue())}
+            resp = requests.post(callback_api, data={"ownerId": owner_id}, files=files, timeout=20)
+            return jsonify({
+                "message": "PDF sent to callback API",
+                "callback_status": resp.status_code
+            })
+
+        # Otherwise return PDF directly
+        return send_file(
+            doc_bytes,
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        return jsonify(error="doc_generation_failed", details=str(e)), 500
+
 
 # Register blueprints
 bp.register_blueprint(scraper_bp)
