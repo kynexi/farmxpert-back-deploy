@@ -4,6 +4,7 @@ import io
 import requests
 from flask import Blueprint, request, jsonify, send_file
 from docx import Document
+from bson import ObjectId
 from app.db_utilis import db
 
 bp = Blueprint("main", __name__)
@@ -314,32 +315,32 @@ def _download_bytes(url: str) -> bytes:
 
 def _load_profile_by_owner_id(owner_id: str) -> dict:
     """
-    Load user profile and farm data from MongoDB.
+    Load user profile and farm data from MongoDB using ObjectId.
     Returns profile dict compatible with autocomplete.
     """
     try:
-        # Get user from default.users where _id matches ownerId
-        user_doc = db.get_database("default").users.find_one({"_id": owner_id})
-        
+        oid = ObjectId(owner_id)
+
+        # Get user from default.users
+        user_doc = db.get_database("default").users.find_one({"_id": oid})
+
         # Get farm data from FarmXpertDB
         farm_db = db.get_database("FarmXpertDB")
-        animals = list(farm_db.animals.find({"ownerId": owner_id}))
-        fields = list(farm_db.fields.find({"ownerId": owner_id}))
-        vehicles = list(farm_db.vehicles.find({"ownerId": owner_id}))
+        animals = list(farm_db.animals.find({"ownerId": oid}))
+        fields = list(farm_db.fields.find({"ownerId": oid}))
+        vehicles = list(farm_db.vehicles.find({"ownerId": oid}))
 
-        # Build profile structure
         profile = {
             "user": user_doc or {},
             "animals": animals,
             "fields": fields,
             "vehicles": vehicles,
         }
-        
+
         return profile
     except Exception as e:
         print(f"Error loading profile: {e}")
         return {}
-
 # api endpoints
 
 @scraper_bp.post("/complete-docx")
