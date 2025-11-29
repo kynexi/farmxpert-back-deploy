@@ -1,12 +1,11 @@
 import os
 from dotenv import load_dotenv
 from flask import Flask, jsonify
-from sqlalchemy import text
 from .routes import bp as main_bp
 from .match.routes import bp_match
 from .apply.routes import bp_apply
 from app.subsidies.routes import bp_sub as subsidies_bp
-from .db_utilis import engine
+from .db_utilis import db
 
 from flask_cors import CORS
 
@@ -24,10 +23,9 @@ def create_app():
     @app.get("/db")
     def db_now():
         try:
-            with engine.connect() as conn:
-                t = conn.execute(text("select now()")).scalar_one()
-                return jsonify({"now": t.isoformat()})
+            server_status = db.command("serverStatus")
+            return jsonify({"now": server_status["localTime"]})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
+        
     return app
