@@ -8,8 +8,9 @@ from docx import Document
 from bson import ObjectId
 from app.db_utilis import client
 
-from docx2pdf import convert  
 import tempfile
+from docx import Document
+from fpdf import FPDF  
 
 bp = Blueprint("main", __name__)
 scraper_bp = Blueprint("scraper", __name__, url_prefix="/api/")
@@ -315,56 +316,51 @@ def _download_bytes(url: str) -> bytes:
     r.raise_for_status()
     return r.content
 
-def _generate_doc_for_profile(profile: dict) -> io.BytesIO:
-    """
-    Create a DOCX file with all farmer data.
-    """
-    doc = Document()
-    doc.add_heading("Farm Profile", level=1)
-
+def _generate_pdf_for_profile(profile: dict) -> io.BytesIO:
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Farm Profile", ln=True)
+    
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 8, "Farmer Info", ln=True)
+    pdf.set_font("Arial", size=12)
     user = profile.get("user", {})
-    animals = profile.get("animals", [])
-    fields = profile.get("fields", [])
-    vehicles = profile.get("vehicles", [])
-
-    # User info
-    doc.add_heading("Farmer Info", level=2)
     if user:
         for k, v in user.items():
-            doc.add_paragraph(f"{k}: {v}")
+            pdf.multi_cell(0, 6, f"{k}: {v}")
     else:
-        doc.add_paragraph("No user info available.")
-
-    # Animals
-    doc.add_heading("Animals", level=2)
+        pdf.cell(0, 6, "No user info available", ln=True)
+    
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 8, "Animals", ln=True)
+    pdf.set_font("Arial", size=12)
+    animals = profile.get("animals", [])
     if animals:
         for a in animals:
-            doc.add_paragraph(", ".join(f"{k}: {v}" for k, v in a.items()))
+            pdf.multi_cell(0, 6, ", ".join(f"{k}: {v}" for k, v in a.items()))
     else:
-        doc.add_paragraph("No animals available.")
-
-    # Fields
-    doc.add_heading("Fields", level=2)
-    if fields:
-        for f in fields:
-            doc.add_paragraph(", ".join(f"{k}: {v}" for k, v in f.items()))
-    else:
-        doc.add_paragraph("No fields available.")
-
-    # Vehicles
-    doc.add_heading("Vehicles", level=2)
-    if vehicles:
-        for v in vehicles:
-            doc.add_paragraph(", ".join(f"{k}: {val}" for k, val in v.items()))
-    else:
-        doc.add_paragraph("No vehicles available.")
-
-    # Save to BytesIO
-    bio = io.BytesIO()
-    doc.save(bio)
+        pdf.cell(0, 6, "No animals available", ln=True)
+    
+    # Similarly for fields and vehicles
+    for section_name, items in [("Fields", profile.get("fields", [])),
+                                ("Vehicles", profile.get("vehicles", []))]:
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 8, section_name, ln=True)
+        pdf.set_font("Arial", size=12)
+        if items:
+            for item in items:
+                pdf.multi_cell(0, 6, ", ".join(f"{k}: {v}" for k, v in item.items()))
+        else:
+            pdf.cell(0, 6, f"No {section_name.lower()} available", ln=True)
+    
+    pdf_bytes = pdf.output(dest='S').encode('latin1')
+    bio = io.BytesIO(pdf_bytes)
     bio.seek(0)
     return bio
-
+    
 # mongo db profile loader
 
 def _load_profile_by_owner_id(owner_id: str) -> dict:
@@ -555,12 +551,13 @@ def extract_profile():
 @scraper_bp.post("/doc-gen")
 def doc_gen():
     """
-    Generate a DOCX document for a farmer, optionally send to callback API.
+    Generate a DOCX or PDF document for a farmer, optionally send to callback API.
     
     Body JSON:
     {
         "ownerId": "string",
-        "callbackAPI": "string"  # optional
+        "callbackAPI": "string",  # optional
+        "pdf": true|false          # optional, default false
     }
     
     Response:
@@ -570,6 +567,7 @@ def doc_gen():
     data = request.get_json(silent=True) or {}
     owner_id = (data.get("OwnerId") or "").strip()
     callback_api = (data.get("callbackAPI") or "").strip()
+    as_pdf = bool(data.get("pdf", False))
 
     if not owner_id:
         return jsonify(error="missing_owner_id", details="Provide 'ownerId'."), 400
@@ -578,12 +576,20 @@ def doc_gen():
         # Load farmer profile from MongoDB
         profile = _load_profile_by_owner_id(owner_id)
 
-        # Generate DOCX
-        doc_bytes = _generate_doc_for_profile(profile)
+        if as_pdf:
+            # Generate PDF
+            doc_bytes = _generate_pdf_for_profile(profile)
+            filename = f"{owner_id}_farm_profile.pdf"
+            mimetype = "application/pdf"
+        else:
+            # Generate DOCX
+            doc_bytes = _generate_doc_for_profile(profile)
+            filename = f"{owner_id}_farm_profile.docx"
+            mimetype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
         # If callbackAPI exists, POST it there
         if callback_api:
-            files = {"processedData": ("farm_profile.docx", doc_bytes.getvalue())}
+            files = {"processedData": (filename, doc_bytes.getvalue())}
             resp = requests.post(callback_api, data={"ownerId": owner_id}, files=files, timeout=20)
             return jsonify({
                 "message": "Document sent to callback API",
@@ -593,9 +599,9 @@ def doc_gen():
         # Otherwise return file directly
         return send_file(
             doc_bytes,
-            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            mimetype=mimetype,
             as_attachment=True,
-            download_name=f"{owner_id}_farm_profile.docx"
+            download_name=filename
         )
 
     except Exception as e:
