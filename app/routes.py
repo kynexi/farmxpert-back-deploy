@@ -551,15 +551,14 @@ def extract_profile():
 @scraper_bp.post("/doc-gen")
 def doc_gen():
     """
-    Generate a DOCX or PDF document for a farmer, optionally send to callback API.
-    
+    Generate a PDF document for a farmer, optionally send to callback API.
+
     Body JSON:
     {
         "ownerId": "string",
-        "callbackAPI": "string",  # optional
-        "pdf": true|false          # optional, default false
+        "callbackAPI": "string"  # optional
     }
-    
+
     Response:
         - If callbackAPI is provided, posts the file there
         - Otherwise returns the file directly
@@ -567,7 +566,6 @@ def doc_gen():
     data = request.get_json(silent=True) or {}
     owner_id = (data.get("OwnerId") or "").strip()
     callback_api = (data.get("callbackAPI") or "").strip()
-    as_pdf = bool(data.get("pdf", False))
 
     if not owner_id:
         return jsonify(error="missing_owner_id", details="Provide 'ownerId'."), 400
@@ -576,27 +574,21 @@ def doc_gen():
         # Load farmer profile from MongoDB
         profile = _load_profile_by_owner_id(owner_id)
 
-        if as_pdf:
-            # Generate PDF
-            doc_bytes = _generate_pdf_for_profile(profile)
-            filename = f"{owner_id}_farm_profile.pdf"
-            mimetype = "application/pdf"
-        else:
-            # Generate DOCX
-            doc_bytes = _generate_doc_for_profile(profile)
-            filename = f"{owner_id}_farm_profile.docx"
-            mimetype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        # Generate PDF
+        doc_bytes = _generate_pdf_for_profile(profile)
+        filename = f"{owner_id}_farm_profile.pdf"
+        mimetype = "application/pdf"
 
         # If callbackAPI exists, POST it there
         if callback_api:
             files = {"processedData": (filename, doc_bytes.getvalue())}
             resp = requests.post(callback_api, data={"ownerId": owner_id}, files=files, timeout=20)
             return jsonify({
-                "message": "Document sent to callback API",
+                "message": "PDF sent to callback API",
                 "callback_status": resp.status_code
             })
 
-        # Otherwise return file directly
+        # Otherwise return PDF directly
         return send_file(
             doc_bytes,
             mimetype=mimetype,
