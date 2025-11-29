@@ -1,11 +1,15 @@
 import os
 import re
+from flask import send_file
 import io
 import requests
 from flask import Blueprint, request, jsonify, send_file
 from docx import Document
 from bson import ObjectId
 from app.db_utilis import client
+
+from docx2pdf import convert  
+import tempfile
 
 bp = Blueprint("main", __name__)
 scraper_bp = Blueprint("scraper", __name__, url_prefix="/api/")
@@ -311,6 +315,56 @@ def _download_bytes(url: str) -> bytes:
     r.raise_for_status()
     return r.content
 
+def _generate_doc_for_profile(profile: dict) -> io.BytesIO:
+    """
+    Create a DOCX file with all farmer data.
+    """
+    doc = Document()
+    doc.add_heading("Farm Profile", level=1)
+
+    user = profile.get("user", {})
+    animals = profile.get("animals", [])
+    fields = profile.get("fields", [])
+    vehicles = profile.get("vehicles", [])
+
+    # User info
+    doc.add_heading("Farmer Info", level=2)
+    if user:
+        for k, v in user.items():
+            doc.add_paragraph(f"{k}: {v}")
+    else:
+        doc.add_paragraph("No user info available.")
+
+    # Animals
+    doc.add_heading("Animals", level=2)
+    if animals:
+        for a in animals:
+            doc.add_paragraph(", ".join(f"{k}: {v}" for k, v in a.items()))
+    else:
+        doc.add_paragraph("No animals available.")
+
+    # Fields
+    doc.add_heading("Fields", level=2)
+    if fields:
+        for f in fields:
+            doc.add_paragraph(", ".join(f"{k}: {v}" for k, v in f.items()))
+    else:
+        doc.add_paragraph("No fields available.")
+
+    # Vehicles
+    doc.add_heading("Vehicles", level=2)
+    if vehicles:
+        for v in vehicles:
+            doc.add_paragraph(", ".join(f"{k}: {val}" for k, val in v.items()))
+    else:
+        doc.add_paragraph("No vehicles available.")
+
+    # Save to BytesIO
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio
+
 # mongo db profile loader
 
 def _load_profile_by_owner_id(owner_id: str) -> dict:
@@ -497,6 +551,56 @@ def extract_profile():
 
     except Exception as e:
         return jsonify(error="extraction_failed", details=str(e)), 500
+    
+@scraper_bp.post("/doc-gen")
+def doc_gen():
+    """
+    Generate a DOCX document for a farmer, optionally send to callback API.
+    
+    Body JSON:
+    {
+        "ownerId": "string",
+        "callbackAPI": "string"  # optional
+    }
+    
+    Response:
+        - If callbackAPI is provided, posts the file there
+        - Otherwise returns the file directly
+    """
+    data = request.get_json(silent=True) or {}
+    owner_id = (data.get("OwnerId") or "").strip()
+    callback_api = (data.get("callbackAPI") or "").strip()
+
+    if not owner_id:
+        return jsonify(error="missing_owner_id", details="Provide 'ownerId'."), 400
+
+    try:
+        # Load farmer profile from MongoDB
+        profile = _load_profile_by_owner_id(owner_id)
+
+        # Generate DOCX
+        doc_bytes = _generate_doc_for_profile(profile)
+
+        # If callbackAPI exists, POST it there
+        if callback_api:
+            files = {"processedData": ("farm_profile.docx", doc_bytes.getvalue())}
+            resp = requests.post(callback_api, data={"ownerId": owner_id}, files=files, timeout=20)
+            return jsonify({
+                "message": "Document sent to callback API",
+                "callback_status": resp.status_code
+            })
+
+        # Otherwise return file directly
+        return send_file(
+            doc_bytes,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            as_attachment=True,
+            download_name=f"{owner_id}_farm_profile.docx"
+        )
+
+    except Exception as e:
+        return jsonify(error="doc_generation_failed", details=str(e)), 500
+
 
 # Register blueprints
 bp.register_blueprint(scraper_bp)
