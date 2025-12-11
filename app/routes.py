@@ -403,15 +403,44 @@ def _load_profile_by_owner_id(owner_id: str) -> dict:
 def complete_docx():
     """
     Autocomplete DOCX fields using user profile from MongoDB.
-    
-    Body (JSON):
-    {
-      "url": "https://.../document.docx",  # Direct URL to DOCX
-      "ownerId": "user123",                # MongoDB user ID
-      "instructions": "Optional AI instructions",
-      "language": "ro",                    # Default: "ro"
-      "filename": "output.docx"            # Optional output filename
-    }
+    ---
+    tags:
+      - Document Processing
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            url:
+              type: string
+              description: Direct URL to DOCX file
+            ownerId:
+              type: string
+              description: MongoDB user ID
+            instructions:
+              type: string
+              description: Optional AI instructions for field completion
+            language:
+              type: string
+              default: "ro"
+              description: Language code (default Romanian)
+            filename:
+              type: string
+              default: "document_autocomplete.docx"
+              description: Output filename
+    responses:
+      200:
+        description: Completed DOCX file
+        schema:
+          type: file
+      400:
+        description: Missing or invalid parameters
+      500:
+        description: Processing error
+      502:
+        description: Failed to download source document
     """
     data = request.get_json(silent=True) or {}
     
@@ -489,18 +518,63 @@ def complete_docx():
     except Exception as e:
         return jsonify(error="autocomplete_failed", details=str(e)), 500
 
+
+
 @scraper_bp.post("/extract-profile")
 def extract_profile():
     """
     Extract user profile and farm data from MongoDB.
-    
-    Body (JSON):
-    {
-      "ownerId": "string",
-      "callbackAPI": "string"  # Optional: URL to POST results to
-    }
-    
-    Returns profile data or forwards to callback API.
+    ---
+    tags:
+      - Profile Management
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            ownerId:
+              type: string
+              description: MongoDB user ID (required)
+            callbackAPI:
+              type: string
+              description: Optional URL to POST results to
+    responses:
+      200:
+        description: User profile with farm data
+        schema:
+          type: object
+          properties:
+            OwnerId:
+              type: string
+            user:
+              type: object
+            animals:
+              type: array
+              items:
+                type: object
+            fields:
+              type: array
+              items:
+                type: object
+            vehicles:
+              type: array
+              items:
+                type: object
+            count:
+              type: object
+              properties:
+                animals:
+                  type: integer
+                fields:
+                  type: integer
+                vehicles:
+                  type: integer
+      400:
+        description: Missing ownerId
+      500:
+        description: Extraction failed
     """
     data = request.get_json(silent=True) or {}
     
@@ -551,17 +625,37 @@ def extract_profile():
 @scraper_bp.post("/doc-gen")
 def doc_gen():
     """
-    Generate a PDF document for a farmer, optionally send to callback API.
-
-    Body JSON:
-    {
-        "ownerId": "string",
-        "callbackAPI": "string"  # optional
-    }
-
-    Response:
-        - If callbackAPI is provided, posts the file there
-        - Otherwise returns the file directly
+    Generate a PDF document for a farmer profile.
+    ---
+    tags:
+      - Document Generation
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            ownerId:
+              type: string
+              description: MongoDB user ID (required)
+            callbackAPI:
+              type: string
+              description: Optional URL to POST the generated PDF to
+    responses:
+      200:
+        description: Generated PDF file or confirmation of callback delivery
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            callback_status:
+              type: integer
+      400:
+        description: Missing ownerId
+      500:
+        description: PDF generation failed
     """
     data = request.get_json(silent=True) or {}
     owner_id = (data.get("OwnerId") or "").strip()

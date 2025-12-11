@@ -1,10 +1,12 @@
 from flask import Flask, jsonify
+from flasgger import Swagger
 from .routes import bp as main_bp
 from .db_utilis import client, db  # import both client and db
 from flask_cors import CORS
 
 def create_app():
     app = Flask(__name__)
+    swagger = Swagger(app)
     app.config.from_mapping(SECRET_KEY="dev")
     CORS(app, resources={r"/api/*": {"origins": "*"}})
     
@@ -33,5 +35,5 @@ def create_app():
             "status": "ok",
             "service": "FarmXpert API"
         })
-        
+    
     return app
